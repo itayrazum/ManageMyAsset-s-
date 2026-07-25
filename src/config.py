@@ -20,9 +20,9 @@ def _clean(value: str) -> str:
     return (value or "").strip().strip("'\"")
 
 
-# API keys. The Anthropic key is stored as CLAUDE_API in .env.
+# API keys. The Anthropic key may be provided as CLAUDE_API or the standard ANTHROPIC_API_KEY.
 OPENAI_API_KEY = _clean(os.getenv("OPENAI_API_KEY"))
-ANTHROPIC_API_KEY = _clean(os.getenv("CLAUDE_API"))
+ANTHROPIC_API_KEY = _clean(os.getenv("CLAUDE_API") or os.getenv("ANTHROPIC_API_KEY"))
 
 # Which provider the agents use: 'anthropic' or 'openai'. Swap via .env.
 LLM_PROVIDER = _clean(os.getenv("LLM_PROVIDER")) or "anthropic"

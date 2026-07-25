@@ -26,6 +26,16 @@ from src.graph import assistant
 
 st.set_page_config(page_title="ManageMyAsset(s)", page_icon="🏢", layout="centered")
 
+# Fail fast with a clear message if the API key never made it into the environment.
+from src.config import ANTHROPIC_API_KEY, LLM_PROVIDER, OPENAI_API_KEY
+
+if not (ANTHROPIC_API_KEY if LLM_PROVIDER == "anthropic" else OPENAI_API_KEY):
+    st.error(
+        "No API key found. Add it under **Manage app → Settings → Secrets** in TOML form:\n\n"
+        '```toml\nCLAUDE_API = "sk-ant-..."\nLLM_PROVIDER = "anthropic"\nANTHROPIC_MODEL = "claude-haiku-4-5"\n```'
+    )
+    st.stop()
+
 INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "clarify": "❓ Clarifying",
