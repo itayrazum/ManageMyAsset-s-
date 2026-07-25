@@ -37,7 +37,9 @@ if "history" not in st.session_state:
 
 
 def render_trace(trace: dict) -> None:
-    """Render the collapsible 'how I got this' panel for one answer."""
+    """Render the collapsible 'how I got this' panel — only in test mode."""
+    if not st.session_state.get("test_mode", True):
+        return
     with st.expander("🧠 Agent trace"):
         st.markdown(f"**Path:** `{' → '.join(trace.get('path', []))}`")
         st.markdown(f"**Intent:** {INTENT_BADGE.get(trace.get('intent'), trace.get('intent'))}")
@@ -59,14 +61,17 @@ def render_trace(trace: dict) -> None:
 def run_assistant(prompt: str) -> dict:
     """Stream the graph for a prompt, narrating the path live; return the trace."""
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
+    test_mode = st.session_state.get("test_mode", True)
     trace: dict = {"path": []}
 
-    with st.status("Thinking…", expanded=True) as status:
+    with st.status("Thinking…", expanded=test_mode) as status:
         for update in assistant.stream({"messages": [HumanMessage(prompt)]}, config,
                                        stream_mode="updates"):
             for node, delta in update.items():
                 trace["path"].append(node)
                 trace.update({k: v for k, v in delta.items() if k != "messages"})
+                if not test_mode:
+                    continue  # in normal mode, don't narrate the internal steps
                 if node == "route":
                     st.write(f"🧭 Routed to **{INTENT_BADGE.get(trace.get('intent'), trace.get('intent'))}**")
                     if trace.get("route_reason"):
@@ -80,7 +85,8 @@ def run_assistant(prompt: str) -> dict:
                     st.write("❓ Need a bit more detail")
                 elif node in ("out_of_scope", "blocked"):
                     st.write("🛡️ Declining — outside what I can answer")
-        status.update(label=f"Path: {' → '.join(trace['path'])}", state="complete", expanded=False)
+        label = f"Path: {' → '.join(trace['path'])}" if test_mode else "Done"
+        status.update(label=label, state="complete", expanded=False)
 
     st.markdown(trace.get("answer", ""))
     render_trace(trace)
@@ -116,6 +122,10 @@ with st.sidebar:
         st.session_state.thread_id = str(uuid.uuid4())
         st.session_state.history = []
         st.rerun()
+
+    st.divider()
+    st.toggle("🔬 Test mode", value=True, key="test_mode",
+              help="Show the agent's reasoning, routing path, and SQL for each answer.")
 
 # --- Main --------------------------------------------------------------------
 st.title("🏢 ManageMyAsset(s)")

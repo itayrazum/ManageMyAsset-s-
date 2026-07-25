@@ -7,7 +7,7 @@ context-dependent follow-ups into a self-contained question, and (d) guards agai
 
 from typing import Literal
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from ..config import get_llm
@@ -39,12 +39,24 @@ class Route(BaseModel):
 
 _router = get_llm().with_structured_output(Route)
 
+# Keep only the last few messages so the router's context stays bounded on long chats.
+# Follow-ups reference recent turns, so a small window is enough (and lossless for them).
+_HISTORY_WINDOW = 8
+
+
+def _recent(messages):
+    """Return the last few messages, starting on a user turn (Anthropic requires that)."""
+    recent = messages[-_HISTORY_WINDOW:]
+    while recent and not isinstance(recent[0], HumanMessage):
+        recent = recent[1:]
+    return recent
+
 
 def classify(messages) -> Route:
-    """Classify the latest user message, in the context of the whole conversation."""
+    """Classify the latest user message, using a recent window of the conversation."""
     system = ROUTER_PROMPT.format(
         properties=", ".join(list_properties()),
         tenants=", ".join(list_tenants()),
         max_month=_MAX_MONTH, max_quarter=_MAX_QUARTER, max_year=_MAX_YEAR,
     )
-    return _router.invoke([SystemMessage(system), *messages])
+    return _router.invoke([SystemMessage(system), *_recent(messages)])
