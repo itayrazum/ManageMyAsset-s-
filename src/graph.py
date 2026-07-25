@@ -110,6 +110,7 @@ def ask(question: str, thread_id: str = "default") -> dict:
         "standalone_question": final.get("standalone_question", ""),
         "entities": final.get("entities", {}),
         "reason": final.get("route_reason", ""),
+        "reasoning": final.get("reasoning", ""),
         "sql": final.get("sql", ""),
         "grounded": final.get("grounded"),
         "cached": final.get("cached", False),

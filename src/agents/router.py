@@ -11,8 +11,13 @@ from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, Field
 
 from ..config import get_llm
-from ..data import list_properties, list_tenants
+from ..data import _df, list_properties, list_tenants
 from ..prompts import ROUTER_PROMPT
+
+# Latest period in the data, so the router can resolve relative time ("this quarter").
+_MAX_MONTH = _df["month"].max()
+_MAX_QUARTER = _df["quarter"].max()
+_MAX_YEAR = _df["year"].max()
 
 
 class Route(BaseModel):
@@ -40,5 +45,6 @@ def classify(messages) -> Route:
     system = ROUTER_PROMPT.format(
         properties=", ".join(list_properties()),
         tenants=", ".join(list_tenants()),
+        max_month=_MAX_MONTH, max_quarter=_MAX_QUARTER, max_year=_MAX_YEAR,
     )
     return _router.invoke([SystemMessage(system), *messages])
