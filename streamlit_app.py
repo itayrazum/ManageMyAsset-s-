@@ -6,9 +6,20 @@ routed (analytics / clarify / out-of-scope / blocked) and how the answer is prod
 the conversation.
 """
 
+import os
 import uuid
 
 import streamlit as st
+
+# On Streamlit Community Cloud there is no .env file — secrets come from st.secrets. Copy
+# them into the environment BEFORE importing src, so config.py's os.getenv(...) finds the
+# API key. Locally this is a harmless no-op (the .env file is used instead).
+try:
+    for _key, _value in st.secrets.items():
+        os.environ.setdefault(_key, str(_value))
+except Exception:
+    pass
+
 from langchain_core.messages import HumanMessage
 
 from src.graph import assistant
