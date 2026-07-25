@@ -51,11 +51,12 @@ def _route(state: AppState) -> dict:
 def _analytics(state: AppState) -> dict:
     """Answer from the ledger via the SQL analyst, using the answer cache."""
     question = state["standalone_question"] or _latest_user(state["messages"])
-    result = cache.get(question)
+    entities = state.get("entities", {})
+    result = cache.get(question, entities)
     cached = result is not None
     if not cached:
         result = ask_sql(question)
-        cache.set(question, result)
+        cache.set(question, result, entities)
     return {"answer": result["answer"], "reasoning": result["reasoning"],
             "sql": result["sql"], "grounded": result["grounded"], "cached": cached,
             "messages": [AIMessage(result["answer"])]}
