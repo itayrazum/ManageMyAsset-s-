@@ -24,3 +24,7 @@ class AppState(TypedDict):
     sql: str                   # analytics only: the SQL that was run
     grounded: bool             # analytics only: grounding-check result
     cached: bool               # analytics only: whether the answer came from the cache
+    chart_data: list           # visualize only: the rows to plot
+    chart_x: str               # visualize only: the dimension column
+    chart_y: str               # visualize only: the value column
+    chart_type: str            # visualize only: 'bar' | 'line'
