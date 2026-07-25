@@ -10,11 +10,13 @@ multi-turn clarifications resolve against earlier turns. Out-of-scope and blocke
 are static text on purpose — no LLM is invoked for them, so they can't be manipulated.
 """
 
+import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from . import cache
+from .agents.responder import write_answer, write_caption
 from .agents.router import classify
 from .agents.sql_analyst import ask_sql
 from .state import AppState
@@ -62,6 +64,58 @@ def _analytics(state: AppState) -> dict:
             "messages": [AIMessage(result["answer"])]}
 
 
+_TIME_DIMENSIONS = ("month", "quarter", "year")
+
+
+def _chart_spec(rows: list) -> dict | None:
+    """Pick a chart type and x/y columns from grouped rows, or None if not chartable."""
+    if not rows or len(rows) < 2:  # need at least two points to plot
+        return None
+    columns = list(rows[0].keys())
+    numeric = [c for c in columns
+               if isinstance(rows[0].get(c), (int, float)) and not isinstance(rows[0].get(c), bool)]
+    dimensions = [c for c in columns if c not in numeric]
+    if not numeric or not dimensions:
+        return None
+    x = dimensions[0]
+    y = numeric[0]
+    chart_type = "line" if any(t in x.lower() for t in _TIME_DIMENSIONS) else "bar"
+    return {"type": chart_type, "x": x, "y": y}
+
+
+def _visualize(state: AppState) -> dict:
+    """Answer with a chart: get grouped data via the SQL analyst, plot it, and add a caption.
+
+    If the result isn't chartable, fall back to the SQL analyst's normal text answer.
+    """
+    question = state["standalone_question"] or _latest_user(state["messages"])
+    result = ask_sql(question)
+    spec = _chart_spec(result.get("data") or [])
+
+    chart_rows = None
+    if spec:
+        df = pd.DataFrame(result["data"])
+        # Drop rollup/grand-total rows so one big bar doesn't dwarf the real categories.
+        labels = df[spec["x"]].astype(str).str.strip().str.lower()
+        df = df[~labels.isin({"total", "all", "grand total", "overall", "none", ""})]
+        # Collapse any extra breakdown dimensions to one value per x, sorted for a clean axis.
+        agg = df.groupby(spec["x"], as_index=False)[spec["y"]].sum().sort_values(spec["x"])
+        if len(agg) >= 2:
+            chart_rows = agg.to_dict("records")
+
+    if chart_rows is None:  # not chartable — use the plain text answer
+        return {"answer": result["answer"], "reasoning": result["reasoning"],
+                "sql": result["sql"], "grounded": result["grounded"],
+                "messages": [AIMessage(result["answer"])]}
+
+    # A one-sentence caption from the aggregated points (not the raw per-row breakdown).
+    caption = write_caption(question, chart_rows)
+    return {"answer": caption, "reasoning": result["reasoning"], "sql": result["sql"],
+            "grounded": result["grounded"], "chart_data": chart_rows,
+            "chart_x": spec["x"], "chart_y": spec["y"], "chart_type": spec["type"],
+            "messages": [AIMessage(caption)]}
+
+
 def _clarify(state: AppState) -> dict:
     """Ask the router's follow-up question."""
     message = state.get("clarification") or "Could you give me a bit more detail?"
@@ -81,16 +135,17 @@ def _blocked(state: AppState) -> dict:
 _builder = StateGraph(AppState)
 _builder.add_node("route", _route)
 _builder.add_node("analytics", _analytics)
+_builder.add_node("visualize", _visualize)
 _builder.add_node("clarify", _clarify)
 _builder.add_node("out_of_scope", _out_of_scope)
 _builder.add_node("blocked", _blocked)
 _builder.add_edge(START, "route")
 _builder.add_conditional_edges(
     "route", lambda state: state["intent"],
-    {"analytics": "analytics", "clarify": "clarify",
+    {"analytics": "analytics", "visualize": "visualize", "clarify": "clarify",
      "out_of_scope": "out_of_scope", "blocked": "blocked"},
 )
-for _lane in ("analytics", "clarify", "out_of_scope", "blocked"):
+for _lane in ("analytics", "visualize", "clarify", "out_of_scope", "blocked"):
     _builder.add_edge(_lane, END)
 
 # MemorySaver keeps per-thread state in memory for the life of the process.
@@ -115,4 +170,8 @@ def ask(question: str, thread_id: str = "default") -> dict:
         "sql": final.get("sql", ""),
         "grounded": final.get("grounded"),
         "cached": final.get("cached", False),
+        "chart_data": final.get("chart_data"),
+        "chart_x": final.get("chart_x"),
+        "chart_y": final.get("chart_y"),
+        "chart_type": final.get("chart_type"),
     }
