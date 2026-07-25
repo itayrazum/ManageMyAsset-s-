@@ -12,6 +12,8 @@ import uuid
 import pandas as pd
 import streamlit as st
 
+import theme
+
 # On Streamlit Community Cloud there is no .env file — secrets come from st.secrets. Copy
 # them into the environment BEFORE importing src, so config.py's os.getenv(...) finds the
 # API key. Locally this is a harmless no-op (the .env file is used instead).
@@ -37,6 +39,9 @@ if not (ANTHROPIC_API_KEY if LLM_PROVIDER == "anthropic" else OPENAI_API_KEY):
     )
     st.stop()
 
+# Apply the custom dark theme.
+st.markdown(theme.theme_css(), unsafe_allow_html=True)
+
 INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "visualize": "📊 Visualization",
@@ -51,6 +56,8 @@ EXAMPLES = [
     "Show me revenue by month in 2025",
     "How does Q1 2025 compare to Q1 2024?",
 ]
+
+AVATARS = {"user": "🧑‍💼", "assistant": "📊"}
 
 # --- Session state -----------------------------------------------------------
 if "thread_id" not in st.session_state:
@@ -135,9 +142,9 @@ def run_assistant(prompt: str) -> dict:
 def handle(prompt: str) -> None:
     """Process a new user prompt: show it, run the assistant, store both."""
     st.session_state.history.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=AVATARS["user"]):
         st.markdown(prompt)
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=AVATARS["assistant"]):
         try:
             trace = run_assistant(prompt)
             st.session_state.history.append(
@@ -160,11 +167,14 @@ with st.sidebar:
               help="Show the agent's reasoning, routing path, and SQL for each answer.")
 
 # --- Main --------------------------------------------------------------------
-st.title("🏢 ManageMyAsset(s)")
-st.caption("A multi-agent assistant over your property ledger. Expand **Agent trace** to see how each answer is produced.")
+st.markdown('<div class="hero"><span class="logo">🏢</span>'
+            '<span class="grad">ManageMyAsset(s)</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">A multi-agent assistant over your property ledger. '
+            'Toggle <b>Test mode</b> in the sidebar to see how each answer is produced.</div>',
+            unsafe_allow_html=True)
 
 for message in st.session_state.history:
-    with st.chat_message(message["role"]):
+    with st.chat_message(message["role"], avatar=AVATARS.get(message["role"])):
         st.markdown(message["content"])
         if message.get("trace"):
             render_chart(message["trace"])
