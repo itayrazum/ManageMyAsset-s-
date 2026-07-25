@@ -35,6 +35,9 @@ RESPONDER_TEMPERATURE = float(_clean(os.getenv("RESPONDER_TEMPERATURE")) or "0.3
 # Optional evaluator-optimizer: an LLM judge reviews the query before answering.
 USE_JUDGE = _clean(os.getenv("USE_JUDGE")).lower() in ("1", "true", "yes")
 
+# Router memory: how many recent messages it sees (~2 messages per turn, so 8 ≈ 4 turns).
+HISTORY_WINDOW = int(_clean(os.getenv("HISTORY_WINDOW")) or "8")
+
 
 def get_llm(temperature: float = 0):
     """Return the chat model for the configured provider.

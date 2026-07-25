@@ -10,7 +10,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from ..config import get_llm
+from ..config import HISTORY_WINDOW, get_llm
 from ..data import _df, list_properties, list_tenants
 from ..prompts import ROUTER_PROMPT
 
@@ -39,14 +39,14 @@ class Route(BaseModel):
 
 _router = get_llm().with_structured_output(Route)
 
-# Keep only the last few messages so the router's context stays bounded on long chats.
-# Follow-ups reference recent turns, so a small window is enough (and lossless for them).
-_HISTORY_WINDOW = 8
-
-
 def _recent(messages):
-    """Return the last few messages, starting on a user turn (Anthropic requires that)."""
-    recent = messages[-_HISTORY_WINDOW:]
+    """Return the last HISTORY_WINDOW messages, starting on a user turn.
+
+    Keeps the router's context bounded on long chats; follow-ups only reference recent
+    turns, so a small window is lossless for them. (Anthropic requires the first message
+    to be a user turn, hence the trim.)
+    """
+    recent = messages[-HISTORY_WINDOW:]
     while recent and not isinstance(recent[0], HumanMessage):
         recent = recent[1:]
     return recent
