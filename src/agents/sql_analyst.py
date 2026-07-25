@@ -1,13 +1,16 @@
 """Text-to-SQL analyst agent (DuckDB), built as an explicit LangGraph pipeline.
 
-Flow:  generate -> execute -> respond
+Flow:  generate -> execute -> [judge] -> respond -> check
 - generate: the LLM writes its reasoning and ONE read-only SQL query (structured output).
 - execute:  DuckDB runs the query; on a SQL error the graph loops back to generate so
             the agent can self-correct (up to MAX_ATTEMPTS).
-- respond:  the LLM phrases the final answer from the returned rows.
+- judge:    OPTIONAL (config.USE_JUDGE) — an LLM reviews the query and can send it back
+            to generate with feedback (the evaluator-optimizer pattern).
+- respond:  the shared Responder phrases the final answer from the returned rows.
+- check:    a deterministic grounding check flags any answer number not backed by the data.
 
-All arithmetic happens in SQL — the model never computes numbers itself. The agent
-returns a structured result: {reasoning, sql, answer, data}.
+All arithmetic happens in SQL — the model never computes numbers itself. The agent returns
+{reasoning, sql, answer, data, grounded, unsupported, judge_ok, judge_feedback}.
 
 Data access: the property-ledger parquet is exposed as a read-only DuckDB view named
 `ledger` (in-memory; the parquet file is never modified).
@@ -21,8 +24,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from ..config import DATA_PATH, get_llm
-from ..prompts import SQL_ANSWER_PROMPT, SQL_GENERATE_PROMPT
+from ..checks import check_grounding
+from ..config import DATA_PATH, USE_JUDGE, get_llm
+from ..prompts import SQL_GENERATE_PROMPT, SQL_JUDGE_PROMPT
+from .responder import write_answer
 
 # --- DuckDB setup ------------------------------------------------------------
 
@@ -64,7 +69,7 @@ def _execute_sql(query: str) -> dict:
     return {"data": df.head(100).to_dict(orient="records")}
 
 
-# --- LLM: structured SQL generation ------------------------------------------
+# --- LLM: structured SQL generation and judging ------------------------------
 
 class SQLPlan(BaseModel):
     """The planner's structured output: whether it's answerable, why, and the query."""
@@ -74,8 +79,16 @@ class SQLPlan(BaseModel):
     sql: str = Field(default="", description="A single read-only DuckDB SELECT query; empty if not answerable")
 
 
+class Judgment(BaseModel):
+    """The judge's structured verdict on a generated query."""
+
+    is_good: bool = Field(description="True if the SQL correctly and fully answers the question")
+    feedback: str = Field(default="", description="If not good, one sentence on how to fix the query")
+
+
 _llm = get_llm()
 _planner = _llm.with_structured_output(SQLPlan)
+_judge = _llm.with_structured_output(Judgment)
 
 
 # --- Graph state -------------------------------------------------------------
@@ -89,11 +102,15 @@ class SQLState(TypedDict):
     sql: str
     data: list
     error: str
+    judge_ok: bool
+    judge_feedback: str
     answer: str
+    grounded: bool
+    unsupported: list
     attempts: int
 
 
-MAX_ATTEMPTS = 2  # how many times the agent may rewrite a failing query
+MAX_ATTEMPTS = 2  # how many times the agent may rewrite a query (on error or judge feedback)
 
 
 # --- Nodes -------------------------------------------------------------------
@@ -104,8 +121,10 @@ def _generate(state: SQLState) -> dict:
         min_month=_MIN_MONTH, max_month=_MAX_MONTH, max_quarter=_MAX_QUARTER
     )
     human = state["question"]
-    if state.get("error"):  # we're retrying after a failed query
+    if state.get("error"):  # retrying after a failed query
         human += f"\n\nYour previous query failed with:\n{state['error']}\nFix the SQL."
+    elif state.get("judge_feedback") and not state.get("judge_ok", True):  # retrying after judge
+        human += f"\n\nA reviewer flagged your previous attempt:\n{state['judge_feedback']}\nImprove the query."
     plan = _planner.invoke([SystemMessage(system), HumanMessage(human)])
     return {"answerable": plan.answerable, "reasoning": plan.reasoning,
             "sql": plan.sql, "attempts": state.get("attempts", 0) + 1}
@@ -117,21 +136,37 @@ def _execute(state: SQLState) -> dict:
     return {"data": result.get("data", []), "error": result.get("error", "")}
 
 
+def _judge_node(state: SQLState) -> dict:
+    """Optional: have the LLM review whether the query answers the question."""
+    human = (f"Question: {state['question']}\n"
+             f"Reasoning: {state['reasoning']}\n"
+             f"SQL: {state['sql']}\n"
+             f"Results (sample): {state['data'][:5]}")
+    verdict = _judge.invoke([SystemMessage(SQL_JUDGE_PROMPT), HumanMessage(human)])
+    return {"judge_ok": verdict.is_good, "judge_feedback": verdict.feedback}
+
+
 def _respond(state: SQLState) -> dict:
-    """Phrase the final answer from the results (or explain why there are none)."""
+    """Phrase the final answer via the shared Responder."""
     if not state.get("answerable", True):
-        human = (f"Question: {state['question']}\n"
-                 f"This cannot be answered from the ledger. Reason: {state['reasoning']}\n"
-                 f"Politely tell the user you can't answer it from the available financial data.")
+        note = (f"This cannot be answered from the ledger. Reason: {state['reasoning']}. "
+                f"Politely tell the user you can't answer it from the available financial data.")
+        answer = write_answer(state["question"], note=note)
     elif state.get("error"):
-        human = (f"Question: {state['question']}\n"
-                 f"The query failed after retries: {state['error']}\n"
-                 f"Briefly explain that the data could not be retrieved.")
+        note = (f"The query failed after retries: {state['error']}. "
+                f"Briefly explain that the data could not be retrieved.")
+        answer = write_answer(state["question"], note=note)
     else:
-        human = (f"Question: {state['question']}\n"
-                 f"SQL: {state['sql']}\nResults: {state['data']}")
-    answer = _llm.invoke([SystemMessage(SQL_ANSWER_PROMPT), HumanMessage(human)])
-    return {"answer": answer.content}
+        answer = write_answer(state["question"], results=state["data"])
+    return {"answer": answer}
+
+
+def _check(state: SQLState) -> dict:
+    """Deterministically verify the answer's numbers came from the data."""
+    if state.get("answerable", True) and not state.get("error"):
+        result = check_grounding(state["answer"], state["data"], state["question"])
+        return {"grounded": result["grounded"], "unsupported": result["unsupported"]}
+    return {"grounded": True, "unsupported": []}  # nothing to ground for a decline/error
 
 
 def _after_generate(state: SQLState) -> str:
@@ -140,8 +175,15 @@ def _after_generate(state: SQLState) -> str:
 
 
 def _after_execute(state: SQLState) -> str:
-    """Retry a failed query up to MAX_ATTEMPTS, otherwise answer."""
+    """Retry a failed query, else judge (if enabled), else answer."""
     if state.get("error") and state["attempts"] < MAX_ATTEMPTS:
+        return "generate"
+    return "judge" if USE_JUDGE else "respond"
+
+
+def _after_judge(state: SQLState) -> str:
+    """Rewrite the query if the judge rejected it and attempts remain, else answer."""
+    if not state["judge_ok"] and state["attempts"] < MAX_ATTEMPTS:
         return "generate"
     return "respond"
 
@@ -151,13 +193,18 @@ def _after_execute(state: SQLState) -> str:
 _graph = StateGraph(SQLState)
 _graph.add_node("generate", _generate)
 _graph.add_node("execute", _execute)
+_graph.add_node("judge", _judge_node)
 _graph.add_node("respond", _respond)
+_graph.add_node("check", _check)
 _graph.add_edge(START, "generate")
 _graph.add_conditional_edges("generate", _after_generate,
                              {"execute": "execute", "respond": "respond"})
 _graph.add_conditional_edges("execute", _after_execute,
+                             {"generate": "generate", "judge": "judge", "respond": "respond"})
+_graph.add_conditional_edges("judge", _after_judge,
                              {"generate": "generate", "respond": "respond"})
-_graph.add_edge("respond", END)
+_graph.add_edge("respond", "check")
+_graph.add_edge("check", END)
 sql_agent = _graph.compile()
 
 
@@ -165,7 +212,8 @@ def ask_sql(question: str) -> dict:
     """Answer a question with DuckDB SQL.
 
     Returns a dict with the agent's `reasoning`, the `sql` it ran, the final `answer`,
-    and the raw `data` rows.
+    the raw `data` rows, the `grounded` flag with any `unsupported` numbers, and (when
+    the judge is enabled) `judge_ok` / `judge_feedback`.
     """
     final = sql_agent.invoke({"question": question})
     return {
@@ -173,4 +221,8 @@ def ask_sql(question: str) -> dict:
         "sql": final.get("sql", ""),
         "answer": final.get("answer", ""),
         "data": final.get("data", []),
+        "grounded": final.get("grounded", True),
+        "unsupported": final.get("unsupported", []),
+        "judge_ok": final.get("judge_ok"),
+        "judge_feedback": final.get("judge_feedback", ""),
     }

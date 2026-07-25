@@ -29,17 +29,24 @@ LLM_PROVIDER = _clean(os.getenv("LLM_PROVIDER")) or "anthropic"
 OPENAI_MODEL = _clean(os.getenv("OPENAI_MODEL")) or "gpt-4o-mini"
 ANTHROPIC_MODEL = _clean(os.getenv("ANTHROPIC_MODEL")) or "claude-haiku-4-5"
 
+# The responder writes prose, so a little warmth reads more naturally than temp 0.
+RESPONDER_TEMPERATURE = float(_clean(os.getenv("RESPONDER_TEMPERATURE")) or "0.3")
+
+# Optional evaluator-optimizer: an LLM judge reviews the query before answering.
+USE_JUDGE = _clean(os.getenv("USE_JUDGE")).lower() in ("1", "true", "yes")
+
 
 def get_llm(temperature: float = 0):
     """Return the chat model for the configured provider.
 
     Keeping this in one place lets every agent stay provider-agnostic, so we can
     switch between Anthropic and OpenAI from .env without touching agent code.
+    Note: Claude Sonnet 5 rejects `temperature`; Haiku 4.5 (our default) accepts it.
     """
     if LLM_PROVIDER == "anthropic":
         from langchain_anthropic import ChatAnthropic
-        # Claude 5 models no longer accept a temperature parameter.
-        return ChatAnthropic(model=ANTHROPIC_MODEL, api_key=ANTHROPIC_API_KEY)
+        return ChatAnthropic(model=ANTHROPIC_MODEL, temperature=temperature,
+                             api_key=ANTHROPIC_API_KEY)
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(model=OPENAI_MODEL, temperature=temperature,
                       api_key=OPENAI_API_KEY)
