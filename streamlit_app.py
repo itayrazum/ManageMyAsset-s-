@@ -51,10 +51,10 @@ INTENT_BADGE = {
 }
 
 EXAMPLES = [
-    "What is the total P&L for all properties in 2024?",
-    "Which building is most profitable, and by how much?",
-    "Show me revenue by month in 2025",
-    "How does Q1 2025 compare to Q1 2024?",
+    ("💰", "What is the total P&L for all properties in 2024?"),
+    ("🏆", "Which building is most profitable, and by how much?"),
+    ("📊", "Show me revenue by month in 2025"),
+    ("⚖️", "How does Q1 2025 compare to Q1 2024?"),
 ]
 
 AVATARS = {"user": "🧑‍💼", "assistant": "📊"}
@@ -64,6 +64,12 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "history" not in st.session_state:
     st.session_state.history = []  # list of {role, content, trace?}
+
+
+def _md(text: str) -> None:
+    """Render markdown with literal '$' — Streamlit otherwise reads $...$ as LaTeX math,
+    which mangles any answer that has two or more dollar amounts."""
+    st.markdown((text or "").replace("$", r"\$"))
 
 
 def render_chart(trace: dict) -> None:
@@ -78,26 +84,33 @@ def render_chart(trace: dict) -> None:
         st.bar_chart(df, x=x, y=y)
 
 
+def _chip(label: str, kind: str = "muted") -> str:
+    """Return a small colored badge (span) for the agent trace."""
+    return f'<span class="chip chip-{kind}">{label}</span>'
+
+
 def render_trace(trace: dict) -> None:
     """Render the collapsible 'how I got this' panel — only in test mode."""
     if not st.session_state.get("test_mode", True):
         return
     with st.expander("🧠 Agent trace"):
+        chips = [_chip(INTENT_BADGE.get(trace.get("intent"), trace.get("intent")), "intent")]
+        if trace.get("intent") == "analytics":
+            grounded = trace.get("grounded")
+            chips.append(_chip("Grounded" if grounded else "Not fully grounded",
+                               "good" if grounded else "warn"))
+            chips.append(_chip("From cache" if trace.get("cached") else "Freshly computed", "muted"))
+        st.markdown('<div class="chips">' + "".join(chips) + "</div>", unsafe_allow_html=True)
+
         st.markdown(f"**Path:** `{' → '.join(trace.get('path', []))}`")
-        st.markdown(f"**Intent:** {INTENT_BADGE.get(trace.get('intent'), trace.get('intent'))}")
         if trace.get("route_reason"):
             st.caption(trace["route_reason"])
         if trace.get("standalone_question"):
-            st.markdown(f"**Resolved question:** {trace['standalone_question']}")
+            st.markdown("**Resolved question:** " + trace["standalone_question"].replace("$", r"\$"))
         if trace.get("reasoning"):
-            st.markdown(f"**Reasoning:** {trace['reasoning']}")
+            st.markdown("**Reasoning:** " + trace["reasoning"].replace("$", r"\$"))
         if trace.get("sql"):
             st.code(trace["sql"], language="sql")
-        if trace.get("intent") == "analytics":
-            bits = []
-            bits.append("✅ Grounded" if trace.get("grounded") else "⚠️ Not fully grounded")
-            bits.append("⚡ From cache" if trace.get("cached") else "🧮 Freshly computed")
-            st.caption("  •  ".join(bits))
 
 
 def run_assistant(prompt: str) -> dict:
@@ -133,7 +146,7 @@ def run_assistant(prompt: str) -> dict:
         label = f"Path: {' → '.join(trace['path'])}" if test_mode else "Done"
         status.update(label=label, state="complete", expanded=False)
 
-    st.markdown(trace.get("answer", ""))
+    _md(trace.get("answer", ""))
     render_chart(trace)
     render_trace(trace)
     return trace
@@ -143,7 +156,7 @@ def handle(prompt: str) -> None:
     """Process a new user prompt: show it, run the assistant, store both."""
     st.session_state.history.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar=AVATARS["user"]):
-        st.markdown(prompt)
+        _md(prompt)
     with st.chat_message("assistant", avatar=AVATARS["assistant"]):
         try:
             trace = run_assistant(prompt)
@@ -175,22 +188,27 @@ st.markdown('<div class="subtitle">A multi-agent assistant over your property le
 
 for message in st.session_state.history:
     with st.chat_message(message["role"], avatar=AVATARS.get(message["role"])):
-        st.markdown(message["content"])
+        _md(message["content"])
         if message.get("trace"):
             render_chart(message["trace"])
             render_trace(message["trace"])
 
-# Welcome examples (only before the first message)
+# Welcome examples (only before the first message) — a 2x2 grid of cards.
+# Rendered into a placeholder so we can clear it without a full rerun (a rerun would
+# re-render the whole conversation and make the chart re-initialize, which looked laggy).
+examples_slot = st.empty()
 if not st.session_state.history:
-    st.markdown("#### Try one of these:")
-    for example in EXAMPLES:
-        if st.button(example, key=f"ex_{example}", use_container_width=True):
-            st.session_state.pending = example
-            st.rerun()
+    with examples_slot.container():
+        st.markdown("##### Try one of these")
+        cols = st.columns(2)
+        for i, (icon, example) in enumerate(EXAMPLES):
+            with cols[i % 2]:
+                if st.button(f"{icon}  {example}", key=f"ex_{i}", use_container_width=True):
+                    st.session_state.pending = example
 
 prompt = st.chat_input("Ask about your portfolio…")
 if "pending" in st.session_state:
     prompt = st.session_state.pop("pending")
 if prompt:
+    examples_slot.empty()  # clear the welcome cards without a full rerun
     handle(prompt)
-    st.rerun()  # redraw from history so the welcome examples clear and the trace persists

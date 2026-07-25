@@ -67,9 +67,13 @@ h1, h2, h3, h4 { color:var(--text); font-weight:700; letter-spacing:-0.015em; }
 /* buttons */
 .stButton button {
   background:var(--bg2); color:var(--text); border:1px solid var(--border);
-  border-radius:11px; font-weight:500; transition:all .15s ease;
+  border-radius:12px; font-weight:500; text-align:left; padding:.7rem .9rem;
+  transition:all .15s ease;
 }
-.stButton button:hover { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 3px var(--glow); }
+.stButton button:hover {
+  border-color:var(--accent); color:var(--accent);
+  box-shadow:0 0 0 3px var(--glow); transform:translateY(-1px);
+}
 
 /* expander + status cards (the agent trace) */
 [data-testid="stExpander"] { border:1px solid var(--border); border-radius:12px; background:var(--surface); overflow:hidden; }
@@ -80,5 +84,16 @@ h1, h2, h3, h4 { color:var(--text); font-weight:700; letter-spacing:-0.015em; }
 [data-baseweb="toggle"] div[aria-checked="true"] { background:var(--accent) !important; }
 a { color:var(--accent); }
 code, pre { background:var(--surface) !important; border:1px solid var(--border); border-radius:8px; }
+
+/* trace chips */
+.chips { margin:0 0 .5rem; }
+.chip {
+  display:inline-block; padding:.16rem .6rem; margin:0 .35rem .35rem 0;
+  border-radius:999px; font-size:.74rem; font-weight:600; border:1px solid var(--border);
+}
+.chip-intent { background:rgba(56,189,248,.12); color:var(--accent2); border-color:rgba(56,189,248,.35); }
+.chip-good { background:rgba(45,212,191,.12); color:var(--accent); border-color:rgba(45,212,191,.35); }
+.chip-warn { background:rgba(251,191,36,.12); color:#fbbf24; border-color:rgba(251,191,36,.35); }
+.chip-muted { background:var(--surface); color:var(--muted); }
 </style>
 """
