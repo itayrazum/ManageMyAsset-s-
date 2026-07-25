@@ -120,7 +120,8 @@ This is the workhorse. It's its own small pipeline, with a retry loop when a que
 
 ```mermaid
 flowchart LR
-    G[Generate<br/>reasoning + SQL] --> E[Execute<br/>in DuckDB]
+    G[Generate<br/>reasoning + SQL] --> S[SQL safety<br/>check]
+    S --> E[Execute<br/>in DuckDB]
     E -. error .-> G
     E --> J[Judge<br/>optional]
     J -. rejected .-> G
@@ -128,8 +129,14 @@ flowchart LR
     P --> K[Grounding<br/>check]
 
     classDef step fill:#f8fafc,stroke:#94a3b8,color:#1e293b
-    class G,E,J,P,K step
+    classDef check fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class G,E,J,P step
+    class S,K check
 ```
+
+The yellow steps are the two **deterministic checks** (no LLM): the SQL safety check makes sure the
+query is read-only before it runs, and the grounding check makes sure every number in the answer
+came from the data.
 
 
 
@@ -161,7 +168,14 @@ There were three ways to let the assistant answer open-ended questions over the 
 
 I chose text-to-SQL because it is **flexible** (handles questions I didn't anticipate) and
 **safe and deterministic**: DuckDB does the calculation, not the model, and the query is checked to
-be read-only before it runs. DuckDB also reads the parquet file directly and is fast in memory.
+be read-only before it runs.
+
+**About DuckDB:** it's a small SQL database that runs inside the app (like SQLite, but built for
+analytics). There's no server to set up, it reads the parquet file directly, and it runs queries in
+memory, which is more than fast enough for a dataset this size. For a much bigger or production
+setup (millions of rows, many users, live updates), I'd point the same text-to-SQL layer at a proper
+database or warehouse (for example Postgres, BigQuery, or Snowflake). The agent design wouldn't
+change - only the connection.
 
 ---
 
