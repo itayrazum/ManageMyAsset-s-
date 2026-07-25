@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from . import cache
 from .agents.router import classify
 from .agents.sql_analyst import ask_sql
 from .state import AppState
@@ -48,11 +49,15 @@ def _route(state: AppState) -> dict:
 
 
 def _analytics(state: AppState) -> dict:
-    """Answer from the ledger via the SQL analyst."""
+    """Answer from the ledger via the SQL analyst, using the answer cache."""
     question = state["standalone_question"] or _latest_user(state["messages"])
-    result = ask_sql(question)
+    result = cache.get(question)
+    cached = result is not None
+    if not cached:
+        result = ask_sql(question)
+        cache.set(question, result)
     return {"answer": result["answer"], "reasoning": result["reasoning"],
-            "sql": result["sql"], "grounded": result["grounded"],
+            "sql": result["sql"], "grounded": result["grounded"], "cached": cached,
             "messages": [AIMessage(result["answer"])]}
 
 
@@ -107,4 +112,5 @@ def ask(question: str, thread_id: str = "default") -> dict:
         "reason": final.get("route_reason", ""),
         "sql": final.get("sql", ""),
         "grounded": final.get("grounded"),
+        "cached": final.get("cached", False),
     }

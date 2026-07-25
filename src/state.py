@@ -23,3 +23,4 @@ class AppState(TypedDict):
     reasoning: str             # analytics only: the SQL agent's reasoning
     sql: str                   # analytics only: the SQL that was run
     grounded: bool             # analytics only: grounding-check result
+    cached: bool               # analytics only: whether the answer came from the cache
