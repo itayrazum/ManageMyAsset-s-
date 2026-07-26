@@ -4,7 +4,7 @@ A chat assistant for a real-estate asset manager. You ask questions in plain Eng
 property financial ledger - P&L, revenue, expenses, tenants, properties, time comparisons - and it
 answers, with the numbers computed from the data, not guessed by the model.
 
-Built with **LangGraph** (multi-agent orchestration), **DuckDB** (SQL over the ledger),
+Built with **LangGraph**, **DuckDB** (SQL over the ledger),
 **Claude** (Haiku 4.5 by default), and **Streamlit** (chat UI).
 
 **Live demo:** [https://managemyassets.streamlit.app](https://managemyassets.streamlit.app/)
