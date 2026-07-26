@@ -39,8 +39,30 @@ def _latest_user(messages) -> str:
     return ""
 
 
+MAX_INPUT_CHARS = 1000
+
+
+def _validate_input(text: str) -> str:
+    """Deterministic guard on the raw input; returns a guidance message if it's unusable.
+
+    Cheap checks that don't need the LLM (empty / whitespace / very long) - the last also
+    keeps a stray huge paste from blowing up the context on the public URL.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return 'Could you type a question? For example: "What was my P&L in 2024?"'
+    if len(stripped) > MAX_INPUT_CHARS:
+        return (f"That message is quite long ({len(stripped)} characters). Could you shorten it "
+                f"to a specific question about your portfolio?")
+    return ""
+
+
 def _route(state: AppState) -> dict:
-    """Classify the latest message and record the routing decision."""
+    """Guard the input, then classify the latest message and record the routing decision."""
+    problem = _validate_input(_latest_user(state["messages"]))
+    if problem:  # short-circuit to a helpful clarify, without an LLM call
+        return {"intent": "clarify", "clarification": problem,
+                "standalone_question": "", "entities": {}, "route_reason": "input guard"}
     route = classify(state["messages"])
     return {
         "intent": route.intent,
