@@ -14,8 +14,9 @@ class AppState(TypedDict):
     """State passed between the router and the lane nodes."""
 
     messages: Annotated[list, add_messages]  # full conversation (memory + multi-turn clarify)
-    intent: str                # analytics | clarify | out_of_scope | blocked
+    intent: str                # analytics | visualize | insights | compound | clarify | out_of_scope | blocked
     standalone_question: str   # latest request rewritten as a self-contained question
+    subtasks: list             # compound only: the parts, each {intent, question}
     entities: dict             # extracted details (property / tenant / timeframe / metric)
     clarification: str         # follow-up question to ask, when intent == clarify
     route_reason: str          # why the router chose this lane

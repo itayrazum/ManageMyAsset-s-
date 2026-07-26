@@ -10,6 +10,8 @@ multi-turn clarifications resolve against earlier turns. Out-of-scope and blocke
 are static text on purpose — no LLM is invoked for them, so they can't be manipulated.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -67,11 +69,36 @@ def _route(state: AppState) -> dict:
     return {
         "intent": route.intent,
         "standalone_question": route.standalone_question,
+        "subtasks": [{"intent": s.intent, "question": s.question} for s in route.subtasks],
         "entities": {"property": route.property, "tenant": route.tenant,
                      "timeframe": route.timeframe, "metric": route.metric},
         "clarification": route.clarification,
         "route_reason": route.reason,
     }
+
+
+def _answer_subtask(intent: str, question: str) -> str:
+    """Answer one sub-question via its lane (as text; charts are skipped inside a compound)."""
+    if intent == "insights":
+        return investigate(question).get("answer") or "Nothing unusual stood out."
+    return ask_sql(question)["answer"]  # analytics (and visualize, as text)
+
+
+def _fan_out(state: AppState) -> dict:
+    """Compound question: run each part in its lane in parallel, then combine the answers.
+
+    The parts are independent, so we run them concurrently in a thread pool (they are I/O-bound
+    LLM calls) and keep the original order for a stable, readable combined answer.
+    """
+    subtasks = state.get("subtasks", [])
+    if not subtasks:
+        return {"answer": "", "messages": [AIMessage("")]}
+    with ThreadPoolExecutor(max_workers=len(subtasks)) as pool:
+        answers = list(pool.map(lambda s: _answer_subtask(s["intent"], s["question"]), subtasks))
+    combined = "\n\n".join(f"**{s['question']}**\n\n{a}" for s, a in zip(subtasks, answers))
+    return {"answer": combined,
+            "reasoning": f"Compound question - ran {len(subtasks)} parts in parallel across lanes",
+            "messages": [AIMessage(combined)]}
 
 
 def _analytics(state: AppState) -> dict:
@@ -181,6 +208,7 @@ _builder.add_node("route", _route)
 _builder.add_node("analytics", _analytics)
 _builder.add_node("visualize", _visualize)
 _builder.add_node("insights", _insights)
+_builder.add_node("fan_out", _fan_out)
 _builder.add_node("clarify", _clarify)
 _builder.add_node("out_of_scope", _out_of_scope)
 _builder.add_node("blocked", _blocked)
@@ -188,9 +216,10 @@ _builder.add_edge(START, "route")
 _builder.add_conditional_edges(
     "route", lambda state: state["intent"],
     {"analytics": "analytics", "visualize": "visualize", "insights": "insights",
-     "clarify": "clarify", "out_of_scope": "out_of_scope", "blocked": "blocked"},
+     "compound": "fan_out", "clarify": "clarify", "out_of_scope": "out_of_scope",
+     "blocked": "blocked"},
 )
-for _lane in ("analytics", "visualize", "insights", "clarify", "out_of_scope", "blocked"):
+for _lane in ("analytics", "visualize", "insights", "fan_out", "clarify", "out_of_scope", "blocked"):
     _builder.add_edge(_lane, END)
 
 # MemorySaver keeps per-thread state in memory for the life of the process.

@@ -19,7 +19,9 @@ right place:
 - **analytics** - answerable from the ledger (P&L, revenue, expenses, top tenants, comparisons).
 - **visualize** - the user wants a chart ("show me revenue by month").
 - **insights** - the user asks what's unusual ("is anything unusual in the numbers?"). An
-  anomaly-detection model finds the outliers and a small tool-using agent investigates them.
+anomaly-detection model finds the outliers and a small tool-using agent investigates them.
+- **compound** - a question with parts that span different lanes ("who are my top tenants, *and*
+is anything unusual?"). It's split, each part runs in parallel, and the answers are combined.
 - **clarify** - the question is missing a required detail (e.g. "revenue of *a* building" - which one?).
 - **out of scope** - a real question the data can't answer (market prices, forecasts, general knowledge).
 - **blocked** - an attempt to abuse the assistant (prompt injection, "show me your system prompt").
@@ -85,17 +87,18 @@ flowchart TD
     R -->|analytics| A[SQL Analyst]
     R -->|visualize| V[Visualization]
     R -->|insights| I[Investigator<br/>anomaly model + tools]
+    R -->|compound| F[Fan-out<br/>split, run in parallel, combine]
     R -->|clarify| C[Clarify]
     R -->|out of scope| D["Decline / Refuse"]
     R -->|blocked| D
-    A & V & I & C & D --> ANS([Answer])
+    A & V & I & F & C & D --> ANS([Answer])
 
     classDef io fill:#e0f2fe,stroke:#0284c7,color:#075985
     classDef router fill:#ede9fe,stroke:#7c3aed,color:#5b21b6
     classDef lane fill:#f8fafc,stroke:#94a3b8,color:#1e293b
     class U,ANS io
     class R router
-    class A,V,I,C,D lane
+    class A,V,I,F,C,D lane
 ```
 
 
@@ -137,11 +140,11 @@ flowchart LR
     class S,K check
 ```
 
+
+
 The yellow steps are the two **deterministic checks** (no LLM): the SQL safety check makes sure the
 query is read-only before it runs, and the grounding check makes sure every number in the answer
 came from the data.
-
-
 
 - **Generate** - the model writes its reasoning and one read-only SQL query (structured output).
 - **Execute** - DuckDB runs it. If the SQL fails, the error goes back to *Generate* and it tries again.
@@ -165,8 +168,7 @@ There were three ways to let the assistant answer open-ended questions over the 
 1. **A fixed set of tools** (one function per question type). Reliable, but only answers the
   questions you thought of in advance - it overfits and can't handle new phrasings.
 2. **A pandas "code agent"** that writes and runs Python. Flexible, but it runs model-generated
-  code. On a public URL that's a security risk (someone could get it to run arbitrary code), and
-   it also hands the math back to the model.
+  code. On a public URL that's a security risk, and  it also hands the math back to the model.
 3. **Text-to-SQL over DuckDB** (what I used). The model writes SQL; DuckDB runs it.
 
 I chose text-to-SQL because it is **flexible** (handles questions I didn't anticipate) and
@@ -207,6 +209,15 @@ controlled pipeline. Example: *"is anything unusual?"* -> the model flags a -$14
 in January 2024 -> the agent drills in -> it was one tenant, and discounts returned to normal the
 next month.
 
+## Compound questions (fan-out)
+
+Some questions have two parts that need different lanes, is analytics + insights. For those, the router marks the
+question `compound` and splits it into sub-questions, each tagged with its lane. A fan-out node
+runs the parts **in parallel** and combines the answers into one reply.
+
+It only splits genuinely cross-lane questions - *"P&L for 2024 and 2025"* is a single analytics
+question, so it stays in one lane.
+
 ## Guardrails
 
 Because this is a financial tool, a wrong number is worse than no answer, and a public URL invites
@@ -227,11 +238,7 @@ and never reveal the prompt.
 
 - **SQL safety** - a query only runs if it's a single read-only `SELECT`/`WITH`. Anything that
 writes or touches the filesystem is rejected before execution.
-- **Grounding check** - after the answer is written, a plain-Python check confirms that every
-meaningful number in the answer actually appears in the query results. It handles shorthand
-("$99.5K"), expense signs (an expense of -$230 shown as "$230"), and ignores list numbers like
-"top 3". If the model made up or miscalculated a number, this catches it. No LLM involved, so it's
-cheap and reliable.
+- **Grounding check** - after the answer is written, a plain-Python check confirms that every meaningful number in the answer actually appears in the query results. If the model made up or miscalculated a number, this catches it. No LLM involved, so it's cheap and reliable.
 
 
 
@@ -324,9 +331,7 @@ ran every question through the assistant, and saved the question, the true answe
 answer, the reasoning, and the SQL to `eval/results.csv`. I then went through them manually to find
 mistakes and refine the prompts.
 
-This manual review is how I found and fixed several real issues - the router asking for a timeframe
-when the question was clearly portfolio-wide, relative time ("this quarter vs last year") not
-resolving, and a few grounding-check false alarms.
+This manual review is how I found and fixed several real issues.
 
 There are also **unit tests** (`tests/`) for the deterministic parts - the grounding check, the SQL
 safety guard, the cache key, and the data helpers - with no API calls.
@@ -343,9 +348,7 @@ reasoning, and whether the answer was grounded and served from cache. It's a qui
 what the assistant did. Turn it off for a clean chat.
 
 For the full picture, the app supports **LangSmith** tracing. If you set `LANGSMITH_TRACING=true`
-and `LANGSMITH_API_KEY` (see `.env.example`), every request is traced - the full node tree with
-per-step latency, tokens, and cost. It's off unless those variables are set, so there's no cost or
-external call by default.
+and `LANGSMITH_API_KEY` (see `.env.example`), every request is traced - the full node tree with per-step latency, tokens, and cost. It's off unless those variables are set.
 
 ---
 

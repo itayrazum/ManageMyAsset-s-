@@ -46,6 +46,7 @@ INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "visualize": "📊 Visualization",
     "insights": "🔎 Insights",
+    "compound": "🔀 Compound",
     "clarify": "❓ Clarifying",
     "out_of_scope": "↪️ Out of scope",
     "blocked": "🚫 Blocked",
@@ -142,6 +143,8 @@ def run_assistant(prompt: str) -> dict:
                     st.write("📊 Built a chart from the data")
                 elif node == "insights":
                     st.write("🔎 Investigating with tools (anomaly model + SQL analyst)")
+                elif node == "fan_out":
+                    st.write("🔀 Split into parts, ran each lane, and combined the answers")
                 elif node == "clarify":
                     st.write("❓ Need a bit more detail")
                 elif node in ("out_of_scope", "blocked"):
