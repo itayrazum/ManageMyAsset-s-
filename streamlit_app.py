@@ -40,6 +40,7 @@ if not (ANTHROPIC_API_KEY if LLM_PROVIDER == "anthropic" else OPENAI_API_KEY):
 INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "visualize": "📊 Visualization",
+    "insights": "🔎 Insights",
     "clarify": "❓ Clarifying",
     "out_of_scope": "↪️ Out of scope",
     "blocked": "🚫 Blocked",
@@ -49,7 +50,7 @@ EXAMPLES = [
     "What is the total P&L for all properties in 2024?",
     "Which building is most profitable, and by how much?",
     "Show me revenue by month in 2025",
-    "How does Q1 2025 compare to Q1 2024?",
+    "Is anything unusual in the numbers?",
 ]
 
 # --- Session state -----------------------------------------------------------
@@ -119,6 +120,8 @@ def run_assistant(prompt: str) -> dict:
                 elif node == "visualize":
                     st.write("🗄️ Queried the ledger")
                     st.write("📊 Built a chart from the data")
+                elif node == "insights":
+                    st.write("🔎 Investigating with tools (anomaly model + SQL analyst)")
                 elif node == "clarify":
                     st.write("❓ Need a bit more detail")
                 elif node in ("out_of_scope", "blocked"):

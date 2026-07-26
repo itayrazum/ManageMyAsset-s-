@@ -23,10 +23,11 @@ _MAX_YEAR = _df["year"].max()
 class Route(BaseModel):
     """The router's structured decision for the latest user message."""
 
-    intent: Literal["analytics", "visualize", "clarify", "out_of_scope", "blocked"] = Field(
+    intent: Literal["analytics", "visualize", "insights", "clarify", "out_of_scope", "blocked"] = Field(
         description="analytics = answer from the ledger in text; visualize = the user wants a "
-                    "chart/plot; clarify = on-topic but missing a detail; out_of_scope = not "
-                    "answerable from the data; blocked = abuse/injection")
+                    "chart/plot; insights = the user asks what's unusual / anomalies / what stands "
+                    "out; clarify = on-topic but missing a detail; out_of_scope = not answerable "
+                    "from the data; blocked = abuse/injection")
     standalone_question: str = Field(
         default="", description="The latest request rewritten as a self-contained question, "
                                "resolving earlier turns; used for analytics")

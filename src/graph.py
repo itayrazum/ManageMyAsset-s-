@@ -18,7 +18,9 @@ from langgraph.graph import END, START, StateGraph
 from . import cache
 from .agents.responder import write_answer, write_caption
 from .agents.router import classify
+from .agents.investigator import investigate
 from .agents.sql_analyst import ask_sql
+from .anomaly import detect_anomalies
 from .state import AppState
 
 OUT_OF_SCOPE_MSG = (
@@ -116,6 +118,26 @@ def _visualize(state: AppState) -> dict:
             "messages": [AIMessage(caption)]}
 
 
+def _insights(state: AppState) -> dict:
+    """Investigate what's unusual via a tool-using agent (anomaly model + the SQL analyst)."""
+    question = state["standalone_question"] or _latest_user(state["messages"])
+    result = investigate(question)
+    if result.get("error") or not result["answer"]:
+        # Fallback: report the raw anomalies if the agent loop didn't produce an answer.
+        entities = state.get("entities", {})
+        anomalies = detect_anomalies(property=entities.get("property") or None,
+                                     tenant=entities.get("tenant") or None)
+        note = (f"An anomaly-detection model flagged: {anomalies}. Summarize the notable ones "
+                "briefly." if anomalies else "Nothing unusual stood out; say so in one sentence.")
+        answer = write_answer(question, note=note)
+        return {"answer": answer, "reasoning": "Anomaly detection (fallback)",
+                "messages": [AIMessage(answer)]}
+    tools = result["tools_used"]
+    reasoning = "Investigated with tools: " + (", ".join(tools) if tools else "none")
+    return {"answer": result["answer"], "reasoning": reasoning,
+            "messages": [AIMessage(result["answer"])]}
+
+
 def _clarify(state: AppState) -> dict:
     """Ask the router's follow-up question."""
     message = state.get("clarification") or "Could you give me a bit more detail?"
@@ -136,16 +158,17 @@ _builder = StateGraph(AppState)
 _builder.add_node("route", _route)
 _builder.add_node("analytics", _analytics)
 _builder.add_node("visualize", _visualize)
+_builder.add_node("insights", _insights)
 _builder.add_node("clarify", _clarify)
 _builder.add_node("out_of_scope", _out_of_scope)
 _builder.add_node("blocked", _blocked)
 _builder.add_edge(START, "route")
 _builder.add_conditional_edges(
     "route", lambda state: state["intent"],
-    {"analytics": "analytics", "visualize": "visualize", "clarify": "clarify",
-     "out_of_scope": "out_of_scope", "blocked": "blocked"},
+    {"analytics": "analytics", "visualize": "visualize", "insights": "insights",
+     "clarify": "clarify", "out_of_scope": "out_of_scope", "blocked": "blocked"},
 )
-for _lane in ("analytics", "visualize", "clarify", "out_of_scope", "blocked"):
+for _lane in ("analytics", "visualize", "insights", "clarify", "out_of_scope", "blocked"):
     _builder.add_edge(_lane, END)
 
 # MemorySaver keeps per-thread state in memory for the life of the process.
