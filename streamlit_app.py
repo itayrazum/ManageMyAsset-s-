@@ -45,6 +45,7 @@ st.markdown(theme.theme_css(), unsafe_allow_html=True)
 INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "visualize": "📊 Visualization",
+    "insights": "🔎 Insights",
     "clarify": "❓ Clarifying",
     "out_of_scope": "↪️ Out of scope",
     "blocked": "🚫 Blocked",
@@ -139,6 +140,8 @@ def run_assistant(prompt: str) -> dict:
                 elif node == "visualize":
                     st.write("🗄️ Queried the ledger")
                     st.write("📊 Built a chart from the data")
+                elif node == "insights":
+                    st.write("🔎 Investigating with tools (anomaly model + SQL analyst)")
                 elif node == "clarify":
                     st.write("❓ Need a bit more detail")
                 elif node in ("out_of_scope", "blocked"):

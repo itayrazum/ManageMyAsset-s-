@@ -18,6 +18,8 @@ right place:
 
 - **analytics** - answerable from the ledger (P&L, revenue, expenses, top tenants, comparisons).
 - **visualize** - the user wants a chart ("show me revenue by month").
+- **insights** - the user asks what's unusual ("is anything unusual in the numbers?"). An
+  anomaly-detection model finds the outliers and a small tool-using agent investigates them.
 - **clarify** - the question is missing a required detail (e.g. "revenue of *a* building" - which one?).
 - **out of scope** - a real question the data can't answer (market prices, forecasts, general knowledge).
 - **blocked** - an attempt to abuse the assistant (prompt injection, "show me your system prompt").
@@ -82,17 +84,18 @@ flowchart TD
     U([User question]) --> R{{Router}}
     R -->|analytics| A[SQL Analyst]
     R -->|visualize| V[Visualization]
+    R -->|insights| I[Investigator<br/>anomaly model + tools]
     R -->|clarify| C[Clarify]
     R -->|out of scope| D["Decline / Refuse"]
     R -->|blocked| D
-    A & V & C & D --> ANS([Answer])
+    A & V & I & C & D --> ANS([Answer])
 
     classDef io fill:#e0f2fe,stroke:#0284c7,color:#075985
     classDef router fill:#ede9fe,stroke:#7c3aed,color:#5b21b6
     classDef lane fill:#f8fafc,stroke:#94a3b8,color:#1e293b
     class U,ANS io
     class R router
-    class A,V,C,D lane
+    class A,V,I,C,D lane
 ```
 
 
@@ -180,6 +183,29 @@ change - only the connection.
 ---
 
 
+
+## Finding anomalies (the Insights lane)
+
+Some questions aren't "compute X" - they're "is anything off?". That's where a non-LLM model
+earns its place.
+
+**The model.** `src/anomaly.py` finds unusual monthly movements in the ledger. It standardizes
+each category's monthly totals *within that category* (so a small category can be flagged as
+readily as a big one), scores them with an **Isolation Forest**, and adds sign-flip detection (a
+normally-negative expense turning positive). It only reports movements that are both statistically
+off *and* practically large, so a small wobble isn't called "unusual". No LLM does any of this -
+it's pure statistics/ML.
+
+**The investigator.** Investigation is open-ended - the next step depends on what you just found -
+so this lane is a genuine **tool-using agent**. It has three deterministic tools: the anomaly
+model, a category's month-by-month history, and a breakdown of who drove a given month. It scans,
+decides what's worth digging into, drills in, and summarizes. The model does the maths; the LLM
+only decides which tool to call and phrases the result.
+
+This is the one place a tool-using agent is the right fit - the analytics path stays the
+controlled pipeline. Example: *"is anything unusual?"* -> the model flags a -$14,874 rent discount
+in January 2024 -> the agent drills in -> it was one tenant, and discounts returned to normal the
+next month.
 
 ## Guardrails
 
@@ -360,11 +386,13 @@ src/
   state.py           # the shared graph state
   cache.py           # the structured answer cache
   checks.py          # the deterministic grounding check
+  anomaly.py         # the anomaly-detection model (Isolation Forest + stats)
   graph.py           # the top-level graph: router -> lanes
   agents/
     router.py        # intent + entities + context + guardrails
     sql_analyst.py   # the text-to-SQL pipeline
     responder.py     # writes the final answer / chart caption
+    investigator.py  # tool-using agent for the insights lane
 eval/
   results.csv        # generated questions, true answers, and generated answers (reviewed by hand)
   *.ipynb            # per-component evaluation notebooks (data, SQL analyst, router)
