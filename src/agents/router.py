@@ -20,14 +20,27 @@ _MAX_QUARTER = _df["quarter"].max()
 _MAX_YEAR = _df["year"].max()
 
 
+class SubTask(BaseModel):
+    """One part of a compound question, with the lane that should handle it."""
+
+    intent: Literal["analytics", "visualize", "insights"] = Field(
+        description="which lane handles this part")
+    question: str = Field(description="this part as a complete, self-contained question")
+
+
 class Route(BaseModel):
     """The router's structured decision for the latest user message."""
 
-    intent: Literal["analytics", "visualize", "insights", "clarify", "out_of_scope", "blocked"] = Field(
+    intent: Literal["analytics", "visualize", "insights", "compound",
+                    "clarify", "out_of_scope", "blocked"] = Field(
         description="analytics = answer from the ledger in text; visualize = the user wants a "
-                    "chart/plot; insights = the user asks what's unusual / anomalies / what stands "
-                    "out; clarify = on-topic but missing a detail; out_of_scope = not answerable "
-                    "from the data; blocked = abuse/injection")
+                    "chart/plot; insights = the user asks what's unusual / anomalies; compound = "
+                    "the question has TWO+ parts spanning different lanes (e.g. a number AND "
+                    "'anything unusual'); clarify = on-topic but missing a detail; out_of_scope = "
+                    "not answerable from the data; blocked = abuse/injection")
+    subtasks: list[SubTask] = Field(
+        default_factory=list,
+        description="ONLY when intent == compound: the 2+ parts, each with its lane and question")
     standalone_question: str = Field(
         default="", description="The latest request rewritten as a self-contained question, "
                                "resolving earlier turns; used for analytics")

@@ -41,6 +41,7 @@ INTENT_BADGE = {
     "analytics": "🔍 Analytics",
     "visualize": "📊 Visualization",
     "insights": "🔎 Insights",
+    "compound": "🔀 Compound",
     "clarify": "❓ Clarifying",
     "out_of_scope": "↪️ Out of scope",
     "blocked": "🚫 Blocked",
@@ -79,6 +80,10 @@ def render_trace(trace: dict) -> None:
     with st.expander("🧠 Agent trace"):
         st.markdown(f"**Path:** `{' → '.join(trace.get('path', []))}`")
         st.markdown(f"**Intent:** {INTENT_BADGE.get(trace.get('intent'), trace.get('intent'))}")
+        if trace.get("subtasks"):
+            st.markdown("**Split into:**")
+            for s in trace["subtasks"]:
+                st.markdown(f"- *{s['intent']}* - {s['question']}")
         if trace.get("route_reason"):
             st.caption(trace["route_reason"])
         if trace.get("standalone_question"):
@@ -122,6 +127,8 @@ def run_assistant(prompt: str) -> dict:
                     st.write("📊 Built a chart from the data")
                 elif node == "insights":
                     st.write("🔎 Investigating with tools (anomaly model + SQL analyst)")
+                elif node == "fan_out":
+                    st.write("🔀 Split into parts, ran each lane, and combined the answers")
                 elif node == "clarify":
                     st.write("❓ Need a bit more detail")
                 elif node in ("out_of_scope", "blocked"):
