@@ -7,12 +7,19 @@ drill-downs), so the LLM only decides *which* tool to call and how to phrase the
 number comes from a tool.
 """
 
+import contextvars
+
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
-from ..anomaly import contributors, detect_anomalies, monthly_series
+from ..anomaly import contributors, detect_anomalies, extract_period, monthly_series
 from ..config import get_llm
 from ..prompts import INVESTIGATOR_PROMPT
+
+# The time scope the user asked about ('2024', '2025-Q1', ...). Set per-call in investigate()
+# and read by find_anomalies, so detection stays inside that window without the LLM having to
+# remember to pass it. A ContextVar is set/read in the same thread, so it is fan-out-safe.
+_PERIOD: contextvars.ContextVar[str] = contextvars.ContextVar("period", default="")
 
 
 @tool
@@ -23,7 +30,8 @@ def find_anomalies(property: str = "", tenant: str = "") -> list:
     for the whole portfolio. Returns flagged points (category, month, value, typical, note).
     An empty list means nothing stood out.
     """
-    return detect_anomalies(property=property or None, tenant=tenant or None)
+    return detect_anomalies(property=property or None, tenant=tenant or None,
+                            period=_PERIOD.get() or None)
 
 
 @tool
@@ -44,12 +52,19 @@ _TOOLS = [find_anomalies, category_history, who_drove]
 _agent = create_react_agent(get_llm(), _TOOLS, prompt=INVESTIGATOR_PROMPT)
 
 
-def investigate(question: str) -> dict:
-    """Run the investigation loop; return the final answer and which tools it used."""
+def investigate(question: str, period: str = "") -> dict:
+    """Run the investigation loop; return the final answer and which tools it used.
+
+    `period` scopes detection to a time window; if omitted, it is read from the question itself
+    (e.g. "anything weird in 2024?" -> '2024'), so the answer stays inside what was asked.
+    """
+    token = _PERIOD.set(period or extract_period(question))
     try:
         result = _agent.invoke({"messages": [("user", question)]}, {"recursion_limit": 14})
     except Exception:
         return {"answer": "", "tools_used": [], "error": True}
+    finally:
+        _PERIOD.reset(token)
     tools_used = [call["name"]
                   for message in result["messages"]
                   for call in getattr(message, "tool_calls", None) or []]

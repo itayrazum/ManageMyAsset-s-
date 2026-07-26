@@ -7,6 +7,7 @@ one; an Isolation Forest then scores the (level, month-over-month) features, and
 only narrates what this model finds - it does none of the detection itself.
 """
 
+import re
 from typing import Optional
 
 import numpy as np
@@ -19,21 +20,52 @@ _df = pd.read_parquet(DATA_PATH)
 _MIN_MONTHS = 4  # need a few points before "unusual" means anything
 
 
-def _monthly(property: Optional[str], tenant: Optional[str]) -> pd.DataFrame:
+def extract_period(text: str) -> str:
+    """Pull a time scope ('2024', '2025-Q1') out of free text, or '' if none is named."""
+    if not text:
+        return ""
+    year = re.search(r"\b(20\d{2})\b", text)
+    quarter = re.search(r"[Qq]\s*([1-4])", text)
+    if year and quarter:
+        return f"{year.group(1)}-Q{quarter.group(1)}"
+    if year:
+        return year.group(1)
+    return ""
+
+
+def _in_period(months: pd.Series, period: str) -> pd.Series:
+    """Boolean mask for the 'YYYY-MNN' month strings that fall inside `period`."""
+    year, _, quarter = period.partition("-Q")
+    mask = months.str.startswith(f"{year}-")
+    if quarter:
+        q = int(quarter)
+        month_num = months.str.split("-M").str[1].astype(int)
+        mask &= month_num.between(3 * (q - 1) + 1, 3 * q)
+    return mask
+
+
+def _monthly(property: Optional[str], tenant: Optional[str],
+             period: Optional[str] = None) -> pd.DataFrame:
     """Monthly total per ledger category, within the requested scope."""
     d = _df
     if property:
         d = d[d["property_name"] == property]
     if tenant:
         d = d[d["tenant_name"] == tenant]
+    if period:
+        d = d[_in_period(d["month"], period)]
     return (d.groupby(["ledger_category", "month"], as_index=False)["profit"].sum()
              .sort_values(["ledger_category", "month"]))
 
 
 def detect_anomalies(top_n: int = 6, property: Optional[str] = None,
-                     tenant: Optional[str] = None) -> list[dict]:
-    """Return the top unusual monthly movements, each with the numbers to explain it."""
-    monthly = _monthly(property, tenant)
+                     tenant: Optional[str] = None, period: Optional[str] = None) -> list[dict]:
+    """Return the top unusual monthly movements, each with the numbers to explain it.
+
+    `period` ('2024', '2025-Q1', ...) scopes detection to that window, so the baseline and
+    the flagged months both stay inside the period the user asked about.
+    """
+    monthly = _monthly(property, tenant, period)
 
     rows = []
     for category, grp in monthly.groupby("ledger_category"):

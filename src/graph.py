@@ -22,7 +22,7 @@ from .agents.responder import write_answer, write_caption
 from .agents.router import classify
 from .agents.investigator import investigate
 from .agents.sql_analyst import ask_sql
-from .anomaly import detect_anomalies
+from .anomaly import detect_anomalies, extract_period
 from .state import AppState
 
 OUT_OF_SCOPE_MSG = (
@@ -170,12 +170,13 @@ def _visualize(state: AppState) -> dict:
 def _insights(state: AppState) -> dict:
     """Investigate what's unusual via a tool-using agent (anomaly model + the SQL analyst)."""
     question = state["standalone_question"] or _latest_user(state["messages"])
-    result = investigate(question)
+    entities = state.get("entities", {})
+    period = extract_period(entities.get("timeframe") or "") or extract_period(question)
+    result = investigate(question, period=period)
     if result.get("error") or not result["answer"]:
         # Fallback: report the raw anomalies if the agent loop didn't produce an answer.
-        entities = state.get("entities", {})
         anomalies = detect_anomalies(property=entities.get("property") or None,
-                                     tenant=entities.get("tenant") or None)
+                                     tenant=entities.get("tenant") or None, period=period or None)
         note = (f"An anomaly-detection model flagged: {anomalies}. Summarize the notable ones "
                 "briefly." if anomalies else "Nothing unusual stood out; say so in one sentence.")
         answer = write_answer(question, note=note)
