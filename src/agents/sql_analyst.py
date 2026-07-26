@@ -16,6 +16,7 @@ Data access: the property-ledger parquet is exposed as a read-only DuckDB view n
 `ledger` (in-memory; the parquet file is never modified).
 """
 
+import logging
 import re
 from typing import TypedDict
 
@@ -26,8 +27,11 @@ from pydantic import BaseModel, Field
 
 from ..checks import check_grounding
 from ..config import DATA_PATH, USE_JUDGE, get_llm
+from ..logging_config import snippet
 from ..prompts import SQL_GENERATE_PROMPT, SQL_JUDGE_PROMPT
 from .responder import write_answer
+
+logger = logging.getLogger(__name__)
 
 # --- DuckDB setup ------------------------------------------------------------
 
@@ -61,6 +65,9 @@ def _execute_sql(query: str) -> dict:
     Uses a fresh cursor per call so it stays safe if called from multiple threads.
     """
     if not _is_safe(query):
+        # WARNING: the model produced a non-read-only query. Benign here (we refuse to run
+        # it), but worth surfacing - a spike could signal a prompt-injection attempt.
+        logger.warning("sql.execute: rejected unsafe query: %s", snippet(query, 120))
         return {"error": "Only read-only SELECT queries are allowed."}
     try:
         df = _con.cursor().execute(query).df()
@@ -126,13 +133,20 @@ def _generate(state: SQLState) -> dict:
     elif state.get("judge_feedback") and not state.get("judge_ok", True):  # retrying after judge
         human += f"\n\nA reviewer flagged your previous attempt:\n{state['judge_feedback']}\nImprove the query."
     plan = _planner.invoke([SystemMessage(system), HumanMessage(human)])
+    attempt = state.get("attempts", 0) + 1
+    logger.info("sql.generate: attempt=%s answerable=%s", attempt, plan.answerable)
+    logger.debug("sql.generate: sql=%s", snippet(plan.sql, 300))
     return {"answerable": plan.answerable, "reasoning": plan.reasoning,
-            "sql": plan.sql, "attempts": state.get("attempts", 0) + 1}
+            "sql": plan.sql, "attempts": attempt}
 
 
 def _execute(state: SQLState) -> dict:
     """Run the generated SQL against DuckDB."""
     result = _execute_sql(state["sql"])
+    if result.get("error"):
+        logger.warning("sql.execute: %s", result["error"])
+    else:
+        logger.info("sql.execute: %s rows", len(result.get("data", [])))
     return {"data": result.get("data", []), "error": result.get("error", "")}
 
 
@@ -143,6 +157,8 @@ def _judge_node(state: SQLState) -> dict:
              f"SQL: {state['sql']}\n"
              f"Results (sample): {state['data'][:5]}")
     verdict = _judge.invoke([SystemMessage(SQL_JUDGE_PROMPT), HumanMessage(human)])
+    logger.info("sql.judge: is_good=%s %s", verdict.is_good,
+                "" if verdict.is_good else snippet(verdict.feedback, 80))
     return {"judge_ok": verdict.is_good, "judge_feedback": verdict.feedback}
 
 
@@ -165,6 +181,8 @@ def _check(state: SQLState) -> dict:
     """Deterministically verify the answer's numbers came from the data."""
     if state.get("answerable", True) and not state.get("error"):
         result = check_grounding(state["answer"], state["data"], state["question"])
+        if not result["grounded"]:
+            logger.warning("sql.check: ungrounded numbers in answer: %s", result["unsupported"])
         return {"grounded": result["grounded"], "unsupported": result["unsupported"]}
     return {"grounded": True, "unsupported": []}  # nothing to ground for a decline/error
 

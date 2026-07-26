@@ -13,9 +13,12 @@ changing this interface — exact match stays conservative: a miss just recomput
 """
 
 import hashlib
+import logging
 import re
 
 from .config import ANTHROPIC_MODEL, DATA_PATH, LLM_PROVIDER, OPENAI_MODEL
+
+logger = logging.getLogger(__name__)
 
 # Version the cache by the data file and the active model — either change busts old keys.
 _DATA_HASH = hashlib.sha256(DATA_PATH.read_bytes()).hexdigest()[:12]
@@ -94,12 +97,17 @@ def _key(question: str, entities: dict | None = None) -> str:
 
 def get(question: str, entities: dict | None = None):
     """Return the cached result for a question, or None on a miss."""
-    return _store.get(_key(question, entities))
+    key = _key(question, entities)
+    hit = _store.get(key)
+    logger.debug("cache %s: %s", "hit" if hit is not None else "miss", key)
+    return hit
 
 
 def set(question: str, result: dict, entities: dict | None = None) -> None:
     """Store a result for a question."""
-    _store[_key(question, entities)] = result
+    key = _key(question, entities)
+    logger.debug("cache store: %s", key)
+    _store[key] = result
 
 
 def clear() -> None:

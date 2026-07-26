@@ -6,6 +6,7 @@ routed (analytics / clarify / out-of-scope / blocked) and how the answer is prod
 the conversation.
 """
 
+import logging
 import os
 import uuid
 
@@ -13,6 +14,8 @@ import pandas as pd
 import streamlit as st
 
 import theme
+
+logger = logging.getLogger("streamlit_app")
 
 # On Streamlit Community Cloud there is no .env file — secrets come from st.secrets. Copy
 # them into the environment BEFORE importing src, so config.py's os.getenv(...) finds the
@@ -160,6 +163,7 @@ def run_assistant(prompt: str) -> dict:
 
 def handle(prompt: str) -> None:
     """Process a new user prompt: show it, run the assistant, store both."""
+    logger.info("ui[%s]: prompt received", st.session_state.thread_id)
     st.session_state.history.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar=AVATARS["user"]):
         _md(prompt)
@@ -169,6 +173,7 @@ def handle(prompt: str) -> None:
             st.session_state.history.append(
                 {"role": "assistant", "content": trace.get("answer", ""), "trace": trace})
         except Exception as exc:  # keep the app alive on an API/LLM hiccup
+            logger.exception("ui[%s]: assistant run failed", st.session_state.thread_id)
             msg = f"Sorry — something went wrong: {exc}"
             st.error(msg)
             st.session_state.history.append({"role": "assistant", "content": msg})

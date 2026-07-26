@@ -6,10 +6,14 @@ analytical steps for more natural phrasing, but is strictly instructed to report
 numbers it is given — never to compute anything itself.
 """
 
+import logging
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..config import RESPONDER_TEMPERATURE, get_llm
 from ..prompts import CHART_CAPTION_PROMPT, RESPONDER_PROMPT
+
+logger = logging.getLogger(__name__)
 
 _llm = get_llm(temperature=RESPONDER_TEMPERATURE)
 
@@ -22,12 +26,16 @@ def write_answer(question: str, results=None, note: str = "") -> str:
     """
     if note:
         human = f"Question: {question}\n{note}"
+        logger.debug("responder: note-based answer (%s rows n/a)", "decline/error")
     else:
         human = f"Question: {question}\nResults: {results}"
+        logger.debug("responder: answering from %s result row(s)",
+                     len(results) if results else 0)
     return _llm.invoke([SystemMessage(RESPONDER_PROMPT), HumanMessage(human)]).content
 
 
 def write_caption(question: str, rows: list) -> str:
     """Write a one-sentence caption for a chart from its aggregated data points."""
     human = f"Question: {question}\nChart data: {rows}"
+    logger.debug("responder: caption from %s point(s)", len(rows))
     return _llm.invoke([SystemMessage(CHART_CAPTION_PROMPT), HumanMessage(human)]).content

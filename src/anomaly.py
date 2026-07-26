@@ -7,6 +7,7 @@ one; an Isolation Forest then scores the (level, month-over-month) features, and
 only narrates what this model finds - it does none of the detection itself.
 """
 
+import logging
 import re
 from typing import Optional
 
@@ -15,6 +16,8 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 
 from .config import DATA_PATH
+
+logger = logging.getLogger(__name__)
 
 _df = pd.read_parquet(DATA_PATH)
 _MIN_MONTHS = 4  # need a few points before "unusual" means anything
@@ -110,6 +113,8 @@ def detect_anomalies(top_n: int = 6, property: Optional[str] = None,
             note = f"{'well above' if r['value'] > r['typical'] else 'well below'} its usual {r['typical']}"
         result.append({"category": r["category"], "month": r["month"],
                        "value": r["value"], "typical": r["typical"], "note": note})
+    logger.info("detect_anomalies: %s flagged (period=%s, %s scored)",
+                len(result), period or "all", len(rows))
     return result
 
 
@@ -122,6 +127,7 @@ def monthly_series(category: str, property: Optional[str] = None,
     if tenant:
         d = d[d["tenant_name"] == tenant]
     g = d.groupby("month", as_index=False)["profit"].sum().sort_values("month")
+    logger.debug("monthly_series: category=%s -> %s month(s)", category, len(g))
     return [{"month": str(m), "value": round(float(v), 2)}
             for m, v in zip(g["month"], g["profit"])]
 
@@ -136,4 +142,6 @@ def contributors(category: str, month: str, property: Optional[str] = None,
         d = d[d["tenant_name"] == tenant]
     dim = "tenant_name" if d["tenant_name"].notna().any() else "property_name"
     g = d.dropna(subset=[dim]).groupby(dim, as_index=False)["profit"].sum().sort_values("profit")
+    logger.debug("contributors: category=%s month=%s by %s -> %s row(s)",
+                 category, month, dim, len(g))
     return [{"who": w, "value": round(float(v), 2)} for w, v in zip(g[dim], g["profit"])]

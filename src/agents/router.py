@@ -5,6 +5,7 @@ context-dependent follow-ups into a self-contained question, and (d) guards agai
 (prompt-injection / out-of-scope). It only classifies — the graph decides what each intent does.
 """
 
+import logging
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,6 +14,8 @@ from pydantic import BaseModel, Field
 from ..config import HISTORY_WINDOW, get_llm
 from ..data import _df, list_properties, list_tenants
 from ..prompts import ROUTER_PROMPT
+
+logger = logging.getLogger(__name__)
 
 # Latest period in the data, so the router can resolve relative time ("this quarter").
 _MAX_MONTH = _df["month"].max()
@@ -73,7 +76,11 @@ def _recent(messages):
     turns, so a small window is lossless for them. (Anthropic requires the first message
     to be a user turn and rejects empty text blocks, hence the filter and trim.)
     """
-    recent = [m for m in messages if _has_text(m)][-HISTORY_WINDOW:]
+    kept = [m for m in messages if _has_text(m)]
+    dropped = len(messages) - len(kept)
+    if dropped:
+        logger.debug("router: dropped %s empty message(s) from history", dropped)
+    recent = kept[-HISTORY_WINDOW:]
     while recent and not isinstance(recent[0], HumanMessage):
         recent = recent[1:]
     return recent
@@ -86,4 +93,9 @@ def classify(messages) -> Route:
         tenants=", ".join(list_tenants()),
         max_month=_MAX_MONTH, max_quarter=_MAX_QUARTER, max_year=_MAX_YEAR,
     )
-    return _router.invoke([SystemMessage(system), *_recent(messages)])
+    window = _recent(messages)
+    logger.debug("classify: %s message(s) in window", len(window))
+    route = _router.invoke([SystemMessage(system), *window])
+    logger.info("classify: intent=%s property=%r tenant=%r timeframe=%r metric=%r",
+                route.intent, route.property, route.tenant, route.timeframe, route.metric)
+    return route

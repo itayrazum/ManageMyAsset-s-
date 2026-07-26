@@ -8,6 +8,7 @@ number comes from a tool.
 """
 
 import contextvars
+import logging
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
@@ -15,6 +16,8 @@ from langgraph.prebuilt import create_react_agent
 from ..anomaly import contributors, detect_anomalies, extract_period, monthly_series
 from ..config import get_llm
 from ..prompts import INVESTIGATOR_PROMPT
+
+logger = logging.getLogger(__name__)
 
 # The time scope the user asked about ('2024', '2025-Q1', ...). Set per-call in investigate()
 # and read by find_anomalies, so detection stays inside that window without the LLM having to
@@ -58,14 +61,18 @@ def investigate(question: str, period: str = "") -> dict:
     `period` scopes detection to a time window; if omitted, it is read from the question itself
     (e.g. "anything weird in 2024?" -> '2024'), so the answer stays inside what was asked.
     """
-    token = _PERIOD.set(period or extract_period(question))
+    scope = period or extract_period(question)
+    token = _PERIOD.set(scope)
+    logger.info("investigate: period=%s", scope or "all")
     try:
         result = _agent.invoke({"messages": [("user", question)]}, {"recursion_limit": 14})
     except Exception:
+        logger.exception("investigate: agent loop failed")
         return {"answer": "", "tools_used": [], "error": True}
     finally:
         _PERIOD.reset(token)
     tools_used = [call["name"]
                   for message in result["messages"]
                   for call in getattr(message, "tool_calls", None) or []]
+    logger.info("investigate: tools used %s", tools_used or "none")
     return {"answer": result["messages"][-1].content, "tools_used": tools_used}

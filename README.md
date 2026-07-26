@@ -350,6 +350,47 @@ what the assistant did. Turn it off for a clean chat.
 For the full picture, the app supports **LangSmith** tracing. If you set `LANGSMITH_TRACING=true`
 and `LANGSMITH_API_KEY` (see `.env.example`), every request is traced - the full node tree with per-step latency, tokens, and cost. It's off unless those variables are set.
 
+### Logging
+
+Every part of the system logs through Python's standard `logging`, so I can follow a request
+end to end from the terminal or a file without turning on Test mode. One call in `src/__init__.py`
+(`configure_logging()`) wires it up, and each module logs under its own name
+(`src.graph`, `src.agents.router`, `src.agents.sql_analyst`, ...), so a line tells me exactly
+where it came from. A single question reads like this:
+
+```
+INFO  | src.graph              | ask[demo]: What is the total P&L for all properties in 2024?
+INFO  | src.agents.router      | classify: intent=analytics property='all properties' timeframe='2024' metric='pnl'
+INFO  | src.agents.sql_analyst | sql.generate: attempt=1 answerable=True
+INFO  | src.agents.sql_analyst | sql.execute: 1 rows
+INFO  | src.graph              | analytics: computed | grounded=True
+INFO  | src.graph              | ask[demo]: done intent=analytics
+```
+
+What each level is for:
+
+- **INFO** - the normal lifecycle: the question, the routing decision and extracted entities, which
+lane ran, cache hit vs computed, chart built, tools the investigator chose, anomalies flagged.
+- **DEBUG** - the details when I need them: the generated SQL, cache keys, grounding counts, the
+router's history window. Set `LOG_LEVEL=DEBUG` to see these.
+- **WARNING** - things worth attention: an ungrounded answer, a SQL retry, and importantly the
+**security events** - a `blocked` request (abuse / prompt-injection) and any non-read-only SQL the
+model tried to run. These are logged with the (truncated) offending input. For now they just go to
+the log, but in production this is the natural hook to **alert on** - e.g. repeated blocks from one
+session, or a spike in injection attempts.
+- **ERROR** - unexpected failures (a full stack trace via `logger.exception`), e.g. the investigator
+loop or the UI handler blowing up, without taking the app down.
+
+Configuration is all environment variables (see `.env.example`), so nothing needs code changes:
+
+- `LOG_LEVEL` - `INFO` (default) or `DEBUG` / `WARNING` / ...
+- `LOG_FILE` - where the file log goes (default `logs/app.log`, a rotating file kept to ~1 MB x 3
+backups); set to `none` to disable file logging (useful on a read-only hosted filesystem).
+- `LOG_TO_STDERR` - set to `0` to silence the console handler and log only to the file.
+
+Third-party libraries (httpx, anthropic, openai, ...) are pinned to WARNING so the output stays about
+the assistant, not HTTP chatter. The `logs/` folder is gitignored.
+
 ---
 
 
@@ -384,6 +425,7 @@ environment so the config finds the key.
 ```
 src/
   config.py          # settings, API keys, the LLM factory (Anthropic/OpenAI)
+  logging_config.py  # central logging setup (console + rotating file, env-driven)
   data.py            # loads the ledger; property/tenant lists for the router
   prompts.py         # all prompts, kept out of the code
   state.py           # the shared graph state

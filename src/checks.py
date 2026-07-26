@@ -6,7 +6,10 @@ or miscalculating figures. It is a heuristic: it ignores small structural intege
 list positions ("1.", "2.") and "top 3", and allows minor rounding.
 """
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # How close an answer number must be to a source number to count as supported.
 _ABS_TOL = 0.02
@@ -84,6 +87,8 @@ def check_grounding(answer: str, results, question: str = "") -> dict:
         if not _is_supported(number, allowed):
             unsupported.append(number)
 
+    logger.debug("grounding: %s answer number(s), %s unsupported",
+                 len(answer_numbers), len(unsupported))
     return {
         "grounded": not unsupported,
         "unsupported": unsupported,

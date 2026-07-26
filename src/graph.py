@@ -10,6 +10,7 @@ multi-turn clarifications resolve against earlier turns. Out-of-scope and blocke
 are static text on purpose — no LLM is invoked for them, so they can't be manipulated.
 """
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
@@ -23,7 +24,10 @@ from .agents.router import classify
 from .agents.investigator import investigate
 from .agents.sql_analyst import ask_sql
 from .anomaly import detect_anomalies, extract_period
+from .logging_config import snippet
 from .state import AppState
+
+logger = logging.getLogger(__name__)
 
 OUT_OF_SCOPE_MSG = (
     "I can only help with questions about your property portfolio's financial data — "
@@ -61,11 +65,17 @@ def _validate_input(text: str) -> str:
 
 def _route(state: AppState) -> dict:
     """Guard the input, then classify the latest message and record the routing decision."""
-    problem = _validate_input(_latest_user(state["messages"]))
+    user_text = _latest_user(state["messages"])
+    problem = _validate_input(user_text)
     if problem:  # short-circuit to a helpful clarify, without an LLM call
+        logger.info("route: input guard tripped -> clarify (%s)", snippet(problem, 60))
         return {"intent": "clarify", "clarification": problem,
                 "standalone_question": "", "entities": {}, "route_reason": "input guard"}
     route = classify(state["messages"])
+    logger.info("route: intent=%s reason=%s", route.intent, snippet(route.reason, 80))
+    if route.subtasks:
+        logger.info("route: split into %s -> %s", len(route.subtasks),
+                    [s.intent for s in route.subtasks])
     return {
         "intent": route.intent,
         "standalone_question": route.standalone_question,
@@ -94,6 +104,8 @@ def _fan_out(state: AppState) -> dict:
     if not subtasks:  # compound with no parts shouldn't happen; fall back gracefully
         msg = "Could you rephrase that as one or more specific questions about your portfolio?"
         return {"answer": msg, "messages": [AIMessage(msg)]}
+    logger.info("fan_out: running %s parts in parallel %s",
+                len(subtasks), [s["intent"] for s in subtasks])
     with ThreadPoolExecutor(max_workers=len(subtasks)) as pool:
         answers = list(pool.map(lambda s: _answer_subtask(s["intent"], s["question"]), subtasks))
     combined = "\n\n".join(f"**{s['question']}**\n\n{a}" for s, a in zip(subtasks, answers))
@@ -111,6 +123,8 @@ def _analytics(state: AppState) -> dict:
     if not cached:
         result = ask_sql(question)
         cache.set(question, result, entities)
+    logger.info("analytics: %s | grounded=%s", "cache hit" if cached else "computed",
+                result.get("grounded"))
     return {"answer": result["answer"], "reasoning": result["reasoning"],
             "sql": result["sql"], "grounded": result["grounded"], "cached": cached,
             "messages": [AIMessage(result["answer"])]}
@@ -156,12 +170,14 @@ def _visualize(state: AppState) -> dict:
             chart_rows = agg.to_dict("records")
 
     if chart_rows is None:  # not chartable — use the plain text answer
+        logger.info("visualize: not chartable, falling back to text answer")
         return {"answer": result["answer"], "reasoning": result["reasoning"],
                 "sql": result["sql"], "grounded": result["grounded"],
                 "messages": [AIMessage(result["answer"])]}
 
     # A one-sentence caption from the aggregated points (not the raw per-row breakdown).
     caption = write_caption(question, chart_rows)
+    logger.info("visualize: built %s chart with %s points", spec["type"], len(chart_rows))
     return {"answer": caption, "reasoning": result["reasoning"], "sql": result["sql"],
             "grounded": result["grounded"], "chart_data": chart_rows,
             "chart_x": spec["x"], "chart_y": spec["y"], "chart_type": spec["type"],
@@ -173,9 +189,11 @@ def _insights(state: AppState) -> dict:
     question = state["standalone_question"] or _latest_user(state["messages"])
     entities = state.get("entities", {})
     period = extract_period(entities.get("timeframe") or "") or extract_period(question)
+    logger.info("insights: investigating period=%s", period or "all")
     result = investigate(question, period=period)
     if result.get("error") or not result["answer"]:
         # Fallback: report the raw anomalies if the agent loop didn't produce an answer.
+        logger.warning("insights: investigator produced no answer, using anomaly fallback")
         anomalies = detect_anomalies(property=entities.get("property") or None,
                                      tenant=entities.get("tenant") or None, period=period or None)
         note = (f"An anomaly-detection model flagged: {anomalies}. Summarize the notable ones "
@@ -184,6 +202,7 @@ def _insights(state: AppState) -> dict:
         return {"answer": answer, "reasoning": "Anomaly detection (fallback)",
                 "messages": [AIMessage(answer)]}
     tools = result["tools_used"]
+    logger.info("insights: investigator used tools %s", tools or "none")
     reasoning = "Investigated with tools: " + (", ".join(tools) if tools else "none")
     return {"answer": result["answer"], "reasoning": reasoning,
             "messages": [AIMessage(result["answer"])]}
@@ -192,16 +211,22 @@ def _insights(state: AppState) -> dict:
 def _clarify(state: AppState) -> dict:
     """Ask the router's follow-up question."""
     message = state.get("clarification") or "Could you give me a bit more detail?"
+    logger.info("clarify: %s", snippet(message, 80))
     return {"answer": message, "messages": [AIMessage(message)]}
 
 
 def _out_of_scope(state: AppState) -> dict:
     """Politely decline a benign question the data can't answer."""
+    logger.info("out_of_scope: declined %s", snippet(_latest_user(state["messages"]), 80))
     return {"answer": OUT_OF_SCOPE_MSG, "messages": [AIMessage(OUT_OF_SCOPE_MSG)]}
 
 
 def _blocked(state: AppState) -> dict:
     """Firmly refuse an abusive or manipulative request."""
+    # WARNING level so abuse/injection attempts stand out in the logs - in production this
+    # is the hook to alert on (repeated blocks from one session, spikes, etc.).
+    logger.warning("blocked: refused abusive/injection attempt: %s",
+                   snippet(_latest_user(state["messages"]), 120))
     return {"answer": BLOCKED_MSG, "messages": [AIMessage(BLOCKED_MSG)]}
 
 
@@ -234,8 +259,10 @@ def ask(question: str, thread_id: str = "default") -> dict:
     Messages under the same `thread_id` share memory, so follow-ups and multi-turn
     clarifications resolve against earlier turns. Returns the answer plus routing details.
     """
+    logger.info("ask[%s]: %s", thread_id, snippet(question))
     config = {"configurable": {"thread_id": thread_id}}
     final = assistant.invoke({"messages": [HumanMessage(question)]}, config)
+    logger.info("ask[%s]: done intent=%s", thread_id, final.get("intent"))
     return {
         "answer": final["answer"],
         "intent": final["intent"],
