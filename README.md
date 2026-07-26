@@ -149,8 +149,9 @@ came from the data.
 - **Generate** - the model writes its reasoning and one read-only SQL query (structured output).
 - **Execute** - DuckDB runs it. If the SQL fails, the error goes back to *Generate* and it tries again.
 - **Judge** - optional (see Guardrails).
-- **Respond** - a separate step phrases the answer from the results. It runs at a slightly higher
-temperature so it reads naturally, but is told to use only the numbers it's given.
+- **Respond** - a separate, shared step (the **Responder**) phrases the answer from the results. The
+insights and clarify/decline lanes reuse the same Responder, so the voice stays consistent. It runs
+at a slightly higher temperature so it reads naturally, but is told to use only the numbers it's given.
 - **Grounding check** - a deterministic check (see Guardrails).
 
 All arithmetic - totals, differences, percentages - is done inside SQL. For a comparison the query
@@ -236,6 +237,9 @@ and never reveal the prompt.
 
 ### 2. Deterministic checks
 
+- **Input guard** - before any LLM call, a plain-Python check rejects blank/whitespace input and caps
+the message length, replying with a helpful nudge instead. It costs nothing and keeps a stray huge
+paste on the public URL from blowing up the context.
 - **SQL safety** - a query only runs if it's a single read-only `SELECT`/`WITH`. Anything that
 writes or touches the filesystem is rejected before execution.
 - **Grounding check** - after the answer is written, a plain-Python check confirms that every meaningful number in the answer actually appears in the query results. If the model made up or miscalculated a number, this catches it. No LLM involved, so it's cheap and reliable.
