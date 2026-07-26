@@ -54,14 +54,26 @@ class Route(BaseModel):
 
 _router = get_llm().with_structured_output(Route)
 
+def _has_text(message) -> bool:
+    """True if the message carries non-whitespace text.
+
+    Empty/whitespace messages (e.g. a blank input the guard already handled, or an empty
+    lane result) must never be sent on: Anthropic rejects any empty text block with a 400.
+    """
+    content = message.content
+    if isinstance(content, str):
+        return bool(content.strip())
+    return bool(content)  # non-string content (rare here) is kept as-is
+
+
 def _recent(messages):
-    """Return the last HISTORY_WINDOW messages, starting on a user turn.
+    """Return the last HISTORY_WINDOW non-empty messages, starting on a user turn.
 
     Keeps the router's context bounded on long chats; follow-ups only reference recent
     turns, so a small window is lossless for them. (Anthropic requires the first message
-    to be a user turn, hence the trim.)
+    to be a user turn and rejects empty text blocks, hence the filter and trim.)
     """
-    recent = messages[-HISTORY_WINDOW:]
+    recent = [m for m in messages if _has_text(m)][-HISTORY_WINDOW:]
     while recent and not isinstance(recent[0], HumanMessage):
         recent = recent[1:]
     return recent

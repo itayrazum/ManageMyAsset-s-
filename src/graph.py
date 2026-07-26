@@ -91,8 +91,9 @@ def _fan_out(state: AppState) -> dict:
     LLM calls) and keep the original order for a stable, readable combined answer.
     """
     subtasks = state.get("subtasks", [])
-    if not subtasks:
-        return {"answer": "", "messages": [AIMessage("")]}
+    if not subtasks:  # compound with no parts shouldn't happen; fall back gracefully
+        msg = "Could you rephrase that as one or more specific questions about your portfolio?"
+        return {"answer": msg, "messages": [AIMessage(msg)]}
     with ThreadPoolExecutor(max_workers=len(subtasks)) as pool:
         answers = list(pool.map(lambda s: _answer_subtask(s["intent"], s["question"]), subtasks))
     combined = "\n\n".join(f"**{s['question']}**\n\n{a}" for s, a in zip(subtasks, answers))
